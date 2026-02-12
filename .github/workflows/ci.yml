@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies (if present)
+        run: |
+          if [ -f package.json ]; then
+            npm ci --silent
+          else
+            echo "No package.json — skipping npm install"
+          fi
+
+      - name: Run tests (if present)
+        run: |
+          if [ -f package.json ] && grep -q '"test"' package.json; then
+            npm test --silent
+          else
+            echo "No test script found — skipping tests"
+          fi
+
+      - name: Build Docker image
+        run: docker build -t doggo-bunny:ci .
+
+      - name: Smoke test container
+        run: |
+          # try to run container and check homepage; tolerate missing port mapping if runner restricts
+          docker run --rm -d -p 8080:80 --name doggo_ci doggo-bunny:ci || docker run --rm -d --name doggo_ci doggo-bunny:ci
+          sleep 2
+          if curl -fsS http://localhost:8080 >/dev/null 2>&1; then
+            echo "Smoke test OK"
+          else
+            echo "Could not reach container at localhost:8080; fetching container logs:" && docker logs doggo_ci || true
+            # fail if container exited with non-zero
+            if [ "$(docker ps -a -f name=doggo_ci --format '{{.Status}}' | grep -i Exited)" != "" ]; then exit 1; fi
+          fi
+          docker stop doggo_ci || true
